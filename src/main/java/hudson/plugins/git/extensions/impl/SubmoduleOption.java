@@ -1,6 +1,7 @@
 package hudson.plugins.git.extensions.impl;
 
 import hudson.Extension;
+import hudson.FilePath;
 import hudson.model.Run;
 import hudson.model.TaskListener;
 import hudson.plugins.git.GitException;
@@ -9,7 +10,12 @@ import hudson.plugins.git.SubmoduleCombinator;
 import hudson.plugins.git.extensions.GitSCMExtension;
 import hudson.plugins.git.extensions.GitSCMExtensionDescriptor;
 import hudson.plugins.git.util.BuildData;
+
+import java.io.File;
 import java.io.IOException;
+import java.io.OutputStreamWriter;
+import java.io.Writer;
+
 import org.jenkinsci.plugins.gitclient.GitClient;
 import org.kohsuke.stapler.DataBoundConstructor;
 
@@ -38,15 +44,17 @@ public class SubmoduleOption extends GitSCMExtension {
      */
     private boolean disableSubmodules;
     private boolean recursiveSubmodules;
+    private boolean collectChanges;
     private boolean trackingSubmodules;
     private String reference;
     private boolean parentCredentials;
     private Integer timeout;
 
     @DataBoundConstructor
-    public SubmoduleOption(boolean disableSubmodules, boolean recursiveSubmodules, boolean trackingSubmodules, String reference,Integer timeout, boolean parentCredentials) {
+    public SubmoduleOption(boolean disableSubmodules, boolean recursiveSubmodules, boolean collectChanges, boolean trackingSubmodules, String reference,Integer timeout, boolean parentCredentials) {
         this.disableSubmodules = disableSubmodules;
         this.recursiveSubmodules = recursiveSubmodules;
+        this.collectChanges = collectChanges;
         this.trackingSubmodules = trackingSubmodules;
         this.parentCredentials = parentCredentials;
         this.reference = reference;
@@ -59,6 +67,10 @@ public class SubmoduleOption extends GitSCMExtension {
 
     public boolean isRecursiveSubmodules() {
         return recursiveSubmodules;
+    }
+
+    public boolean isCollectChanges() {
+        return collectChanges;
     }
 
     public boolean isTrackingSubmodules() {
@@ -106,6 +118,17 @@ public class SubmoduleOption extends GitSCMExtension {
                         .ref(build.getEnvironment(listener).expand(reference))
                         .timeout(timeout)
                         .execute();
+
+                if( collectChanges ) {
+                    FilePath path = new FilePath( new File( build.getRootDir(), "submodule-status" ) );
+
+                    try( Writer writer = new OutputStreamWriter(path.write(),"UTF-8") ) {
+                        git.submoduleStatus()
+                            .recursive( recursiveSubmodules )
+                            .to( writer )
+                            .execute();
+                    }
+                }
             }
         } catch (GitException e) {
             // Re-throw as an IOException in order to allow generic retry
@@ -150,6 +173,9 @@ public class SubmoduleOption extends GitSCMExtension {
         if (recursiveSubmodules != that.recursiveSubmodules) {
             return false;
         }
+        if (collectChanges != that.collectChanges) {
+            return false;
+        }
         if (trackingSubmodules != that.trackingSubmodules) {
             return false;
         }
@@ -178,6 +204,7 @@ public class SubmoduleOption extends GitSCMExtension {
         return "SubmoduleOption{" +
                 "disableSubmodules=" + disableSubmodules +
                 ", recursiveSubmodules=" + recursiveSubmodules +
+                ", recursiveChangelog=" + collectChanges +
                 ", trackingSubmodules=" + trackingSubmodules +
                 ", reference='" + reference + '\'' +
                 ", parentCredentials=" + parentCredentials +

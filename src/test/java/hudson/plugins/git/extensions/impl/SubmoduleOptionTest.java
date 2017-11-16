@@ -56,7 +56,7 @@ public class SubmoduleOptionTest {
     @Issue("JENKINS-31934")
     @Test
     public void testSubmoduleUpdateThrowsIOException() throws Exception {
-        SubmoduleOption submoduleOption = new SubmoduleOption(false, false, false, null, null, false);
+        SubmoduleOption submoduleOption = new SubmoduleOption(false, false, false, false, null, null, false);
 
         // In order to verify that the submodule option correctly converts
         // GitExceptions into IOExceptions, setup a SubmoduleOption, and run

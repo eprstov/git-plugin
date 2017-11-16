@@ -31,6 +31,7 @@ import hudson.plugins.git.extensions.impl.ChangelogToBranch;
 import hudson.plugins.git.extensions.impl.PathRestriction;
 import hudson.plugins.git.extensions.impl.LocalBranch;
 import hudson.plugins.git.extensions.impl.PreBuildMerge;
+import hudson.plugins.git.extensions.impl.SubmoduleOption;
 import hudson.plugins.git.opt.PreBuildMergeOptions;
 import hudson.plugins.git.util.Build;
 import hudson.plugins.git.util.*;
@@ -66,8 +67,10 @@ import org.kohsuke.stapler.export.Exported;
 
 import javax.servlet.ServletException;
 
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.IOException;
+import java.io.OutputStream;
 import java.io.OutputStreamWriter;
 import java.io.PrintStream;
 import java.io.Serializable;
@@ -1183,6 +1186,10 @@ public class GitSCM extends GitSCMBackwardCompatibility {
             listener.getLogger().println("Exception logging commit message for " + revToBuild + ": " + ge.getMessage());
         }
 
+        for (GitSCMExtension ext : extensions) {
+            ext.onCheckoutCompleted(this, build, git,listener);
+        }
+
         // Don't add the tag and changelog if we've already processed this BuildData before.
         if (!buildDataAlreadyPresent) {
             if (build.getActions(AbstractScmTagAction.class).isEmpty()) {
@@ -1192,13 +1199,8 @@ public class GitSCM extends GitSCMBackwardCompatibility {
             }
 
             if (changelogFile != null) {
-                computeChangeLog(git, revToBuild.revision, listener, previousBuildData, new FilePath(changelogFile),
-                        new BuildChooserContextImpl(build.getParent(), build, environment));
+                computeChangeLog( git, listener, build, build.getPreviousBuild(), new FilePath(changelogFile), new BuildChooserContextImpl(build.getParent(), build, environment) );
             }
-        }
-
-        for (GitSCMExtension ext : extensions) {
-            ext.onCheckoutCompleted(this, build, git,listener);
         }
     }
 
@@ -1254,39 +1256,85 @@ public class GitSCM extends GitSCMBackwardCompatibility {
      *      Information that captures what we did during the last build. We need this for changelog,
      *      or else we won't know where to stop.
      */
-    private void computeChangeLog(GitClient git, Revision revToBuild, TaskListener listener, BuildData previousBuildData, FilePath changelogFile, BuildChooserContext context) throws IOException, InterruptedException {
-        boolean executed = false;
-        ChangelogCommand changelog = git.changelog();
-        changelog.includes(revToBuild.getSha1());
-        try (Writer out = new OutputStreamWriter(changelogFile.write(),"UTF-8")) {
-            boolean exclusion = false;
-            ChangelogToBranch changelogToBranch = getExtensions().get(ChangelogToBranch.class);
-            if (changelogToBranch != null) {
-                listener.getLogger().println("Using 'Changelog to branch' strategy.");
-                changelog.excludes(changelogToBranch.getOptions().getRef());
-                exclusion = true;
-            } else {
-                for (Branch b : revToBuild.getBranches()) {
-                    Build lastRevWas = getBuildChooser().prevBuildForChangelog(b.getName(), previousBuildData, git, context);
-                    if (lastRevWas != null && lastRevWas.revision != null && git.isCommitInRepo(lastRevWas.getSHA1())) {
-                        changelog.excludes(lastRevWas.getSHA1());
-                        exclusion = true;
-                    }
+    private void computeChangeLog(GitClient git, TaskListener listener, Run<?, ?> currentBuild, Run<?, ?> previousBuild, FilePath changelogFile, BuildChooserContext context) throws IOException, InterruptedException {
+        ByteArrayOutputStream stream = new ByteArrayOutputStream();
+        try {
+            ChangelogCommand changelog = MakeChangelogCmd( git, getBuildData( currentBuild ), getBuildData( previousBuild ), context );
+            if( changelog != null ) {
+                try( Writer out = new OutputStreamWriter(stream, "UTF-8") ) {
+                    changelog.to(out).max(MAX_CHANGELOG).execute();
                 }
             }
 
-            if (!exclusion) {
-                // this is the first time we are building this branch, so there's no base line to compare against.
-                // if we force the changelog, it'll contain all the changes in the repo, which is not what we want.
-                listener.getLogger().println("First time build. Skipping changelog.");
-            } else {
-                changelog.to(out).max(MAX_CHANGELOG).execute();
-                executed = true;
+            // NOTE: does not respect ChangelogToBranch options
+            SubmoduleOption options = getExtensions().get( SubmoduleOption.class );
+            if( options != null && options.isCollectChanges() ) {
+                WriteSubmoduleChangelog( git, listener, currentBuild, previousBuild, stream );
             }
-        } catch (GitException ge) {
-            ge.printStackTrace(listener.error("Unable to retrieve changeset"));
-        } finally {
-            if (!executed) changelog.abort();
+
+            try( OutputStream result = changelogFile.write() ) {
+                result.write( stream.toByteArray() );
+            }
+        }
+        catch (GitException ex) {
+            ex.printStackTrace( listener.error( "Unable to retrieve changeset" ) );
+        }
+
+    }
+
+    private ChangelogCommand MakeChangelogCmd( GitClient git, BuildData current, BuildData previous, BuildChooserContext context ) throws IOException, InterruptedException {
+        ChangelogCommand result = git.changelog();
+
+        Revision revision = current.getLastBuiltRevision();
+        result.includes( revision.getSha1() );
+
+        ChangelogToBranch extension = getExtensions().get(ChangelogToBranch.class);
+        if (extension != null) {
+            return result.excludes( extension.getOptions().getRef() );
+        }
+        else {
+            for( Branch branch : revision.getBranches() ) {
+                Build lastRevWas = getBuildChooser().prevBuildForChangelog( branch.getName(), previous, git, context );
+                if( lastRevWas != null && lastRevWas.revision != null && git.isCommitInRepo(lastRevWas.getSHA1()) ) {
+                    return result.excludes(lastRevWas.getSHA1());
+                }
+            }
+        }
+
+        result.abort();
+        return null;
+    }
+
+    private List<Statusbook.Entry> GetSubmoduleStatusbook( Run<?, ?> build ) throws IOException {
+        File file = new File( build.getRootDir(), "submodule-status" );
+        return file.exists() ? Statusbook.Parse( file ) : new ArrayList<Statusbook.Entry>();
+    }
+
+    private Set<String> ListSubmodules( Run<?, ?> build ) throws IOException {
+        TreeSet<String> result = new TreeSet<>();
+
+        List<Statusbook.Entry> status = GetSubmoduleStatusbook( build );
+        for( Statusbook.Entry entry : status ) {
+            result.add( entry.path );
+        }
+
+        return result;
+    }
+
+    private void WriteSubmoduleChangelog( GitClient git, TaskListener listener, Run<?, ?> current, Run<?, ?> previous, OutputStream output ) throws IOException, InterruptedException {
+        Set<String> paths = ListSubmodules( current );
+        listener.getLogger().println( "submodules listed: " + paths );
+
+        List< Statusbook.Entry > status = GetSubmoduleStatusbook( previous );
+        for( Statusbook.Entry entry : status ) {
+            if( paths.contains( entry.path ) ) {
+                try( Writer out = new OutputStreamWriter(output, "UTF-8") ) {
+                    ChangelogCommand cmd = git.changelog();
+                    cmd.includes( "HEAD" ).excludes( entry.revision ).to( out ).workspace( entry.path ).execute();
+                }
+            }
+            else
+                listener.getLogger().println( "submodule '" + entry.path + "' does not match the current revision" );
         }
     }
 

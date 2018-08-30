@@ -86,8 +86,7 @@ public class GitSCMFileSystemTest {
      * If you do not have that tag, you will need to include that tag in
      * your fork.  You can do that with the commands:
      *
-     * $ git remote add upstream https://github.com/jenkinsci/git-plugin
-     * $ git fetch --tags upstream
+     * $ git fetch --tags https://github.com/jenkinsci/git-plugin
      * $ git push --tags origin
      */
     @BeforeClass
@@ -102,7 +101,7 @@ public class GitSCMFileSystemTest {
                 tagId = client.revParse(tag);
             } catch (GitException ge) {
                 CliGitCommand gitCmd = new CliGitCommand(null);
-                gitCmd.run("fetch", "--tags");
+                gitCmd.run("fetch", "--tags", "https://github.com/jenkinsci/git-plugin");
                 tagId = client.revParse(tag); /* throws if tag not available */
             }
         }
@@ -115,7 +114,7 @@ public class GitSCMFileSystemTest {
         sampleRepo.write("file", "modified");
         sampleRepo.git("commit", "--all", "--message=dev");
         SCMSource source = new GitSCMSource(null, sampleRepo.toString(), "", "*", "", true);
-        SCMFileSystem fs = SCMFileSystem.of(source, new SCMHead("dev"));
+        SCMFileSystem fs = SCMFileSystem.of(source, new GitBranchSCMHead("dev"));
         assertThat(fs, notNullValue());
         SCMFile root = fs.getRoot();
         assertThat(root, notNullValue());
@@ -141,6 +140,26 @@ public class GitSCMFileSystemTest {
         sampleRepo.write("file", "modified");
         sampleRepo.git("commit", "--all", "--message=dev");
         SCMFileSystem fs = SCMFileSystem.of(source, new SCMHead("dev"), revision);
+        assertThat(fs, notNullValue());
+        assertThat(fs.getRoot(), notNullValue());
+        Iterable<SCMFile> children = fs.getRoot().children();
+        Iterator<SCMFile> iterator = children.iterator();
+        assertThat(iterator.hasNext(), is(true));
+        SCMFile file = iterator.next();
+        assertThat(iterator.hasNext(), is(false));
+        assertThat(file.getName(), is("file"));
+        assertThat(file.contentAsString(), is(""));
+    }
+
+    @Test
+    public void ofSourceRevision_GitBranchSCMHead() throws Exception {
+        sampleRepo.init();
+        sampleRepo.git("checkout", "-b", "dev");
+        SCMSource source = new GitSCMSource(null, sampleRepo.toString(), "", "*", "", true);
+        SCMRevision revision = source.fetch(new GitBranchSCMHead("dev"), null);
+        sampleRepo.write("file", "modified");
+        sampleRepo.git("commit", "--all", "--message=dev");
+        SCMFileSystem fs = SCMFileSystem.of(source, new GitBranchSCMHead("dev"), revision);
         assertThat(fs, notNullValue());
         assertThat(fs.getRoot(), notNullValue());
         Iterable<SCMFile> children = fs.getRoot().children();
@@ -178,7 +197,7 @@ public class GitSCMFileSystemTest {
         sampleRepo.init();
         sampleRepo.git("checkout", "-b", "dev");
         SCMSource source = new GitSCMSource(null, sampleRepo.toString(), "", "*", "", true);
-        SCMRevision revision = source.fetch(new SCMHead("dev"), null);
+        SCMRevision revision = source.fetch(new GitBranchSCMHead("dev"), null);
         sampleRepo.write("file", "modified");
         sampleRepo.git("commit", "--all", "--message=dev");
         final long fileSystemAllowedOffset = isWindows() ? 4000 : 1500;
@@ -244,18 +263,24 @@ public class GitSCMFileSystemTest {
         assertThat(fs, notNullValue());
         assertThat(fs.getRoot(), notNullValue());
         Iterable<SCMFile> children = fs.getRoot().children();
-        Set<String> names = new TreeSet<String>();
+        Set<String> names = new TreeSet<>();
         SCMFile file = null;
         SCMFile file2 = null;
         SCMFile dir = null;
         for (SCMFile f: children) {
             names.add(f.getName());
-            if ("file".equals(f.getName())) {
-                file = f;
-            } else if ("file2".equals(f.getName())) {
-                file2 = f;
-            } else if ("dir".equals(f.getName())) {
-                dir = f;
+            switch (f.getName()) {
+                case "file":
+                    file = f;
+                    break;
+                case "file2":
+                    file2 = f;
+                    break;
+                case "dir":
+                    dir = f;
+                    break;
+                default:
+                    break;
             }
         }
         assertThat(names, containsInAnyOrder(is("file"), is("file2"), is("dir")));

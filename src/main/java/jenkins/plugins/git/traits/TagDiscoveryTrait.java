@@ -46,12 +46,13 @@ import jenkins.scm.api.trait.SCMSourceTrait;
 import jenkins.scm.api.trait.SCMSourceTraitDescriptor;
 import jenkins.scm.impl.TagSCMHeadCategory;
 import jenkins.scm.impl.trait.Discovery;
+import org.jenkinsci.Symbol;
 import org.kohsuke.stapler.DataBoundConstructor;
 
 /**
  * A {@link Discovery} trait for Git that will discover tags on the repository.
  *
- * @since TODO
+ * @since 3.6.0
  */
 public class TagDiscoveryTrait extends SCMSourceTrait {
     /**
@@ -82,6 +83,7 @@ public class TagDiscoveryTrait extends SCMSourceTrait {
     /**
      * Our descriptor.
      */
+    @Symbol("gitTagDiscovery")
     @Extension
     @Discovery
     public static class DescriptorImpl extends SCMSourceTraitDescriptor {

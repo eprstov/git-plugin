@@ -50,14 +50,11 @@ public class UserRemoteConfigTest {
     }
     
     private void assertCredentials(@CheckForNull final Item project, @CheckForNull final String currentCredentialsId, @Nonnull String user, @Nonnull String... expectedCredentialsIds) {
-        final Set<String> actual = new TreeSet<String>(); // for purposes of this test we do not care about order (though StandardListBoxModel does define some)
-        ACL.impersonate(User.get(user).impersonate(), new Runnable() {
-            @Override
-            public void run() {
-                for (ListBoxModel.Option option : r.jenkins.getDescriptorByType(UserRemoteConfig.DescriptorImpl.class).
-                        doFillCredentialsIdItems(project, "http://wherever.jenkins.io/", currentCredentialsId)) {
-                    actual.add(option.value);
-                }
+        final Set<String> actual = new TreeSet<>(); // for purposes of this test we do not care about order (though StandardListBoxModel does define some)
+        ACL.impersonate(User.get(user).impersonate(), () -> {
+            for (ListBoxModel.Option option : r.jenkins.getDescriptorByType(UserRemoteConfig.DescriptorImpl.class).
+                    doFillCredentialsIdItems(project, "http://wherever.jenkins.io/", currentCredentialsId)) {
+                actual.add(option.value);
             }
         });
         assertEquals("expected completions on " + project + " as " + user + " starting with " + currentCredentialsId,
